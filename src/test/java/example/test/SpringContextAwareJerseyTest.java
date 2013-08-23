@@ -1,18 +1,24 @@
 package example.test;
 
+import java.net.URI;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import javax.servlet.Servlet;
+import javax.ws.rs.core.Application;
+import javax.ws.rs.core.UriBuilder;
+import org.glassfish.jersey.server.ResourceConfig;
+import org.glassfish.jersey.servlet.ServletContainer;
+import org.glassfish.jersey.test.JerseyTest;
+import org.glassfish.jersey.test.spi.TestContainerException;
+import org.glassfish.jersey.test.spi.TestContainerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.context.ContextLoaderListener;
-import org.springframework.web.context.request.RequestContextListener;
 
-import com.sun.jersey.spi.spring.container.servlet.SpringServlet;
-import com.sun.jersey.test.framework.JerseyTest;
-import com.sun.jersey.test.framework.WebAppDescriptor;
 
 /**
  * A utility class which allows us to access the application context hidden in
@@ -24,78 +30,97 @@ import com.sun.jersey.test.framework.WebAppDescriptor;
  */
 @Configuration
 public class SpringContextAwareJerseyTest extends JerseyTest {
-    protected static String SERVLET_PATH = "/api";
+    protected static final String SERVLET_PATH = "/api";
+    private static final String URL_MAPPING = SERVLET_PATH + "/*";
 
     final private static ThreadLocal<ApplicationContext> context =
         new ThreadLocal<>();
 
-    // JerseyTest's way of specifying port number for embedded servlet container
+
     @Override
-    protected int getPort(int defaultPort) {
-        return 8080;
+    protected URI getBaseUri() {
+        return UriBuilder.fromUri("http://localhost/").port(8080).build();
     }
 
-    /**
-     * Return a string which contains a list of comma separated package names
-     * where the JAX-RS resources located. This value is used to configure
-     * the init-param "com.sun.jersey.config.property.packages".
-     *
-     * @return a string of package names
-     */
-    protected String getResourceLocation() {
-        return "example.rest";
-    }
 
-    /**
-     * Return the locations of the context configuration classes or packages
-     * used by the test. The value will be used by the SpringServlet to
-     * create the application context. Basically it should match the
-     * contextParam "contextConfigLocation" you set in a web.xml file.
-     *
-     * Note the base implementation returns the test class name. It assumes
-     * the test class itself has the @Configuration annotation specified.
-     * If there are more than one configuration class used, the test case has
-     * to override this method and provides the config location.
-     *
-     * @return contextConfigLocation
-     */
     protected String getContextConfigLocation() {
         return getClass().getName();
     }
 
-    static private String getContextHolderConfigLocation() {
-        return SpringContextAwareJerseyTest.class.getName();
-    }
-
     /**
-     * Return a WebAppDescriptor which will be used to configure the internal
-     * servlet container. Basically the configuration should match the settings
-     * you see in web.xml.
+     * Return an application configuration. Since the real application will be
+     * initialized later by our custom TestContainer, this one is just a dummy.
      *
-     * @return a WebAppDescriptor
+     * @return Application an application configuration
      */
-    protected WebAppDescriptor configure() {
-        String contextConfigLocation = getContextConfigLocation() + " " +
-            getContextHolderConfigLocation();
+    @Override
+    protected Application configure() {
+        ResourceConfig config = new ResourceConfig();
 
-        Map<String, String> initParams = new HashMap<>();
-        initParams.put("com.sun.jersey.config.property.packages",
-                       getResourceLocation());
-        initParams.put("com.sun.jersey.api.json.POJOMappingFeature", "true");
-
-        return new WebAppDescriptor.Builder(initParams)
-            .servletClass(SpringServlet.class)
-            .contextParam(
-                "contextClass",
-                "org.springframework.web.context.support.AnnotationConfigWebApplicationContext")
-            .contextParam("contextConfigLocation", contextConfigLocation)
-            .servletPath(SERVLET_PATH)  // if not specified, it set to root resource
-            .contextListenerClass(ContextLoaderListener.class)
-            .requestListenerClass(RequestContextListener.class)
-            .build();
+        // return a dummy applicationContext.xml to make JerseyTest happy
+        // otherwise it fails initialization claiming app context xml not found
+        config.property("contextConfigLocation", "test-context.xml");
+        return config.getApplication();
     }
 
-    protected final ApplicationContext getContext() {
+    private Map<String, String> getInitParams() {
+        Map<String, String> initParams = new HashMap<>();
+        initParams.put("javax.ws.rs.Application",
+                       "example.rest.Application");
+        return initParams;
+    }
+
+    private Map<String, String> getContextParams() {
+        String contextConfigLocation = getContextConfigLocation();
+        Map<String, String> contextParams = new HashMap<>();
+        contextParams.put("contextConfigLocation", contextConfigLocation);
+        contextParams.put(
+            "contextClass",
+            "org.springframework.web.context.support.AnnotationConfigWebApplicationContext");
+        return contextParams;
+    }
+
+    private List<String> getListeners() {
+        List<String> listeners = new ArrayList<>();
+        listeners.add("org.springframework.web.context.ContextLoaderListener");
+        listeners.add("org.springframework.web.context.request.RequestContextListener");
+        return listeners;
+    }
+
+    private List<String> getUrlMappings() {
+        List<String> mappings = new ArrayList<>();
+        mappings.add(URL_MAPPING);
+        return mappings;
+    }
+
+    // Return our own TestContainerFactory
+    private TestContainerFactory getTestContainerFactory(
+        URI uri,
+        Servlet servlet,
+        Map<String, String> initParams,
+        Map<String, String> contextParams,
+        List<String> listeners,
+        List<String> urlMappings) {
+        return new SpringGrizzlyTestContainerFactory(uri,
+                                                     servlet,
+                                                     initParams,
+                                                     contextParams,
+                                                     listeners,
+                                                     urlMappings);
+    }
+
+    @Override
+    protected TestContainerFactory getTestContainerFactory()
+        throws TestContainerException {
+        return getTestContainerFactory(getBaseUri(),
+                                       new ServletContainer(),
+                                       getInitParams(),
+                                       getContextParams(),
+                                       getListeners(),
+                                       getUrlMappings());
+    }
+
+    protected ApplicationContext getContext() {
         return context.get();
     }
 
